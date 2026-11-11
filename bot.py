@@ -2,7 +2,7 @@ import os
 import time
 import discord
 from discord.ext import tasks, commands
-import requests
+import cloudscraper  # Replaces requests
 from bs4 import BeautifulSoup
 from deepdiff import DeepDiff
 from dotenv import load_dotenv
@@ -16,16 +16,21 @@ ARTICLE_URL = "https://support.discord.com/hc/en-us/articles/360046057772-Discor
 STATE_FILE = "last_content.txt"
 
 intents = discord.Intents.default()
-intents.message_content = True  # Required to read command messages in DMs
+intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 def fetch_article_text():
-    """Extracts all structural elements and text boxes (including mega-box announcements) from the article."""
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36"
-    }
-    response = requests.get(ARTICLE_URL, headers=headers)
-    if response.status_code != 200:
+    """Fetches the article page using cloudscraper to bypass Cloudflare/bot blocks."""
+    # Create a cloudscraper instance
+    scraper = cloudscraper.create_scraper()
+    
+    try:
+        response = scraper.get(ARTICLE_URL)
+        if response.status_code != 200:
+            print(f"Cloudflare/HTTP Error status code: {response.status_code}")
+            return None
+    except Exception as e:
+        print(f"Request exception: {e}")
         return None
     
     soup = BeautifulSoup(response.text, "html.parser")
@@ -34,27 +39,24 @@ def fetch_article_text():
     if not article_body:
         return None
     
-    # Remove unwanted side items
     for unwanted in article_body.select(".article-votes, .social-share, script, style"):
         unwanted.decompose()
 
-    # Target all text-bearing structural tags as well as custom Zendesk callout boxes like .mega-box or .toc-box
     tags_to_find = ["h1", "h2", "h3", "h4", "h5", "h6", "p", "li", "td", "th", "blockquote", "div"]
     
     content_lines = []
     for el in article_body.find_all(tags_to_find):
-        # Only grab specific container divs like mega-box or toc-box to avoid nesting duplicates, 
-        # or grab standard atomic text elements.
         if el.name == "div":
             if not any(cls in el.get("class", []) for cls in ["mega-box", "toc-box"]):
                 continue
                 
         text = el.get_text(strip=True)
-        # Avoid empty strings or exact duplicate container text wrapping
         if text and text not in content_lines:
             content_lines.append(text)
             
     return content_lines
+
+# (Keep the rest of your process_and_notify_changes, check_article loop, and manual_fetch command exactly the same)
 
 async def process_and_notify_changes(user):
     """Core checking and diff logic shared by the loop and the manual command."""
